@@ -34,7 +34,9 @@ from llms4de.data import get_data_path
 
 logger = logging.getLogger(__name__)
 
-CACHE_PATH = get_data_path() / "openai_cache"
+# [REPLICACAO] repeated runs of the same requests need separate caches (otherwise run 2 would just read run 1's
+# responses); REPLICACAO_OPENAI_CACHE_DIR selects another cache directory, default unchanged
+CACHE_PATH = get_data_path() / os.environ.get("REPLICACAO_OPENAI_CACHE_DIR", "openai_cache")
 
 MODEL_PARAMETERS = {  # see https://platform.openai.com/docs/models and https://openai.com/api/pricing/
     # GPT-3.5 Turbo Instruct
@@ -120,6 +122,34 @@ MODEL_PARAMETERS = {  # see https://platform.openai.com/docs/models and https://
         "cost_per_1k_output_tokens": 0.01000,
         "max_context": 128_000,
         "max_output_tokens": 16_384
+    },
+    # [REPLICACAO] GPT-4o (2024-08-06) via OpenRouter, restricted to the OpenAI provider
+    # see https://openrouter.ai/openai/gpt-4o-2024-08-06 and https://openrouter.ai/api/v1/models (retrieved 2026-11-15)
+    "openai/gpt-4o-2024-08-06": {
+        "chat_or_completion": "chat",
+        "cost_per_1k_input_tokens": 0.00250,
+        "cost_per_1k_output_tokens": 0.01000,
+        "max_context": 128_000,
+        "max_output_tokens": 16_384
+    },
+    # [REPLICACAO] GPT-4o-Mini (2024-07-18) via OpenRouter, restricted to the OpenAI provider
+    # see https://openrouter.ai/api/v1/models (retrieved 2026-11-19): prompt 0.15, completion 0.60 USD per 1M tokens,
+    # context 128000; max output as in the original entry "gpt-4o-mini-2024-07-18"
+    "openai/gpt-4o-mini-2024-07-18": {
+        "chat_or_completion": "chat",
+        "cost_per_1k_input_tokens": 0.000150,
+        "cost_per_1k_output_tokens": 0.000600,
+        "max_context": 128_000,
+        "max_output_tokens": 16_384
+    },
+    # [REPLICACAO] current OpenAI model via OpenRouter, restricted to the OpenAI provider
+    # see https://openrouter.ai/openai/gpt-6.1-terra and https://openrouter.ai/api/v1/models (retrieved 2026-11-15)
+    "openai/gpt-6.1-terra": {
+        "chat_or_completion": "chat",
+        "cost_per_1k_input_tokens": 0.00100,
+        "cost_per_1k_output_tokens": 0.00500,
+        "max_context": 1_050_000,
+        "max_output_tokens": 128_000
     },
     "gpt-4o-2024-11-20": {
         "chat_or_completion": "chat",
@@ -260,8 +290,8 @@ def openai_execute(
         if len(pairs_to_execute) > 0:
             progress_bar.clear()  # clear before printing/logging
 
-            if "OPENAI_API_KEY" not in os.environ.keys():
-                raise AssertionError(f"Missing `OPENAI_API_KEY` in environment variables!")
+            if "OPENROUTER_API_KEY" not in os.environ.keys():  # [REPLICACAO] was `OPENAI_API_KEY`
+                raise AssertionError(f"Missing `OPENROUTER_API_KEY` in environment variables!")
 
             # compute maximum cost
             before = time.perf_counter()
@@ -429,6 +459,8 @@ def openai_execute(
 
 
 _do_benchmark = False
+# [REPLICACAO] added to every request sent to OpenRouter
+_OPENROUTER_PROVIDER = {"only": ["openai"], "allow_fallbacks": False, "require_parameters": True}
 _local_context = {}
 _local_semaphore = threading.Semaphore()
 
@@ -443,7 +475,13 @@ def _get_model_params(model: str) -> dict:
 
 @functools.cache
 def _get_encoding_cached(model: str) -> tiktoken.Encoding:
-    return tiktoken.encoding_for_model(model)
+    # [REPLICACAO] OpenRouter model IDs carry a provider prefix ("openai/..."), tiktoken needs the bare OpenAI name
+    try:
+        return tiktoken.encoding_for_model(model.removeprefix("openai/"))
+    except KeyError:
+        # [REPLICACAO] tiktoken 0.8.0 does not know models released after it (e.g., gpt-6.1-terra); use the GPT-4o
+        # encoding as an approximation (only affects the cost estimate shown before execution and rate limiting)
+        return tiktoken.get_encoding("o200k_base")
 
 
 class _Request:
@@ -478,7 +516,8 @@ class _Request:
     def url(self) -> str:
         match self.is_chat_or_completion():
             case "chat":
-                return "https://api.openai.com/v1/chat/completions"
+                # [REPLICACAO] was "https://api.openai.com/v1/chat/completions"
+                return "https://openrouter.ai/api/v1/chat/completions"
             case "completion":
                 return "https://api.openai.com/v1/completions"
             case _:
@@ -594,8 +633,11 @@ class _Request:
     def execute(self) -> requests.Response:
         http_response = requests.post(
             url=self.url(),
-            json=self.request,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}
+            # [REPLICACAO] pin the OpenAI provider and require that all parameters are supported (OpenRouter routing)
+            json=self.request | {"provider": _OPENROUTER_PROVIDER},
+            # [REPLICACAO] was `OPENAI_API_KEY`
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}
         )
 
         if http_response.status_code == 200:
@@ -695,7 +737,8 @@ class _ModelBudgetState:
         return self
 
     def increase_by_response(self, request: _Request, response: _Response) -> "_ModelBudgetState":
-        if response.total_usage() < request.max_total_usage():
+        # [REPLICACAO] OpenRouter does not send the `x-ratelimit-*` headers, so `tpm` and `t` stay None
+        if self.tpm is not None and self.t is not None and response.total_usage() < request.max_total_usage():
             self.t = min(self.tpm, int(self.t + request.max_total_usage() - response.total_usage()))
         return self
 

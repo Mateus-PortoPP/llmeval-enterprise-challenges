@@ -52,6 +52,32 @@ MODEL_PARAMETERS = {
         "cost_per_1k_cache_read_input_tokens": 0.00008,
         "max_context": 200_000,
         "max_output_tokens": 8_192
+    },
+    # [REPLICACAO] current models, see https://platform.claude.com/docs/en/about-claude/models/overview and
+    # https://platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-11-15)
+    "claude-sonnet-5-5": {
+        "cost_per_1k_input_tokens": 0.0020,
+        "cost_per_1k_output_tokens": 0.0100,
+        "cost_per_1k_cache_creation_input_tokens": 0.0025,
+        "cost_per_1k_cache_read_input_tokens": 0.0001,
+        "max_context": 1_000_000,
+        "max_output_tokens": 128_000
+    },
+    "claude-haiku-5-5": {  # prices for prompts up to 100,000 tokens (higher prices apply above that)
+        "cost_per_1k_input_tokens": 0.0001,
+        "cost_per_1k_output_tokens": 0.0005,
+        "cost_per_1k_cache_creation_input_tokens": 0.000125,
+        "cost_per_1k_cache_read_input_tokens": 0.00001,
+        "max_context": 1_000_000,
+        "max_output_tokens": 128_000
+    },
+    "claude-fable-5-2": {
+        "cost_per_1k_input_tokens": 0.0080,
+        "cost_per_1k_output_tokens": 0.0400,
+        "cost_per_1k_cache_creation_input_tokens": 0.0100,
+        "cost_per_1k_cache_read_input_tokens": 0.0002,
+        "max_context": 1_000_000,
+        "max_output_tokens": 128_000
     }
 }
 
@@ -582,7 +608,9 @@ class _ModelBudgetState:
                 (self.r is None or self.r >= 1)
                 and (self.t is None or self.t >= request.max_total_usage())
                 and (self.it is None or self.it >= request.max_input_usage())
-                and (self.ot is None or self.ot >= request.max_output_usage())
+                # [REPLICACAO] with `max_tokens` = 128,000 and an account limit of 100,000 output tokens per minute
+                # the original condition is never true; a full budget (`ot` = `otpm`) is treated as enough
+                and (self.ot is None or self.ot >= min(request.max_output_usage(), self.otpm or request.max_output_usage()))
         )
 
     def consider_time(self) -> "_ModelBudgetState":

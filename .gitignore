@@ -1,3 +1,33 @@
 /data
 /outputs
 /multirun
+
+# chaves de API
+.env
+.env.*
+
+# ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# testes e cobertura
+.pytest_cache/
+.coverage
+.coverage.*
+
+# macOS
+.DS_Store
+
+# [REPLICACAO] textos redigidos por assistente (registro e interpretação); ficam só na máquina local
+/REPLICACAO.md
+/replicacao_analise.ipynb
+/replicacao_analise.html
+# cópias de conflito de sincronização do macOS ("arquivo 2.ext")
+* 2
+* 2.*
+
+# logs de tentativas com erro que trazem caminhos locais nas mensagens do Python; ficam só na máquina local
+/logs_replicacao/piloto_claude-fable-5-2_tentativa1_travou.log
+/logs_replicacao/piloto_gpt-4o-2024-08-06_tentativa1_travou.log
+/logs_replicacao/piloto_gpt-4o-mini-2024-07-18_tentativa1_falha_conexao.log

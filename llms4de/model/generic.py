@@ -40,6 +40,16 @@ def prepare_for_anthropic(request: dict) -> dict:
     if "max_tokens" not in request.keys() or request["max_tokens"] is None:
         request["max_tokens"] = _anthropic.MODEL_PARAMETERS[request["model"]]["max_output_tokens"]
 
+    # [REPLICACAO] Claude Fable 5.2 does not accept the sampling parameters (always uses adaptive thinking)
+    if request["model"] == "claude-fable-5-2":
+        for key in ("temperature", "top_p", "top_k"):
+            if key in request.keys():
+                del request[key]
+
+    # [REPLICACAO] Claude Sonnet 5.5 and Claude Haiku 5.5 refuse `temperature` (HTTP 400, "deprecated for this model")
+    if request["model"] in ("claude-sonnet-5-5", "claude-haiku-5-5") and "temperature" in request.keys():
+        del request["temperature"]
+
     return request
 
 
@@ -219,6 +229,10 @@ def execute_requests(
     match api_name:
         case "openai":
             from llms4de.model import _openai
+            # [REPLICACAO] `openai/gpt-6.1-terra` does not accept `temperature` (OpenRouter refuses the request)
+            for request in requests:
+                if request["model"] == "openai/gpt-6.1-terra" and "temperature" in request.keys():
+                    del request["temperature"]
             return _openai.openai_execute(requests, force=force)
         case "anthropic":
             from llms4de.model import _anthropic
@@ -247,7 +261,9 @@ def extract_text_from_response(response: dict) -> str | None:
     if "choices" in response.keys():  # OpenAI response
         return response["choices"][0]["message"]["content"]
     elif "content" in response.keys():  # Anthropic response
-        return response["content"][0]["text"]
+        # [REPLICACAO] was `response["content"][0]["text"]`; responses with adaptive thinking start with a
+        # "thinking" block, so take the first block of type "text" (same block as before if there is no thinking)
+        return next(block["text"] for block in response["content"] if block["type"] == "text")
     elif "message" in response.keys():  # Ollama response
         return response["message"]["content"]
     elif "output" in response.keys():  # AWS Bedrock response
